@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 load_dotenv()
 import os
+import pymssql
 from openai import OpenAI  # ✅ NUEVA LIBRERÍA
 
 # Usa la clave de OpenAI desde variable de entorno
@@ -93,6 +94,7 @@ async def crear_postulacion(
 
     texto = extraer_texto_pdf(ruta)
 
+    # Simulación del resultado de IA
     try:
         resultado = await analizar_con_gpt4o(texto)
     except Exception as e:
@@ -102,7 +104,7 @@ async def crear_postulacion(
     # Determinar estado
     estado = "Apto" if resultado.strip().endswith("✅ Apto") else "No Apto"
 
-     # Subir a Azure Blob Storage
+    # Subir a Azure Blob Storage
     blob_name = f"{uuid4()}_{cv.filename}"
     blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
     with open(ruta, "rb") as data:
@@ -110,14 +112,18 @@ async def crear_postulacion(
 
     os.remove(ruta)  # limpiar
 
-    # Insertar en base de datos
+    # Insertar en base de datos usando pymssql
     try:
-        conn_str = os.getenv("DATABASE_URL")
-        conn = pyodbc.connect(conn_str)
+        conn = pymssql.connect(
+            server=os.getenv("DB_SERVER"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME")
+        )
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO postulaciones (usuario, nombres, apellidos, correo, celular, dni, fecha_nacimiento, cv_ruta, resultado_ia, estado)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             usuario,
             nombres,
@@ -134,6 +140,7 @@ async def crear_postulacion(
         cursor.close()
         conn.close()
     except Exception as db_error:
+        print(f"[ERROR SQL] {db_error}")
         return {"error": f"No se pudo guardar en la base de datos: {str(db_error)}"}
 
     return {
@@ -142,3 +149,21 @@ async def crear_postulacion(
         "ruta_en_blob": blob_name,
         "resultado_ia": resultado
     }
+
+@app.get("/test-db")
+def test_db():
+    try:
+        conn = pymssql.connect(
+            server=os.getenv("DB_SERVER"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME")
+        )
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return {"success": True, "result": row[0]}
+    except Exception as e:
+        return {"error": str(e)}
