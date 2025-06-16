@@ -60,6 +60,11 @@ CV:
     return respuesta.choices[0].message.content
 
 
+@app.get("/")
+def root():
+    return {"message": "¡Hola desde Azure!"}
+
+
 @app.post("/postulaciones")
 async def crear_postulacion(
     usuario: str = Form(...),
