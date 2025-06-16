@@ -6,3 +6,5 @@ httpx
 PyMuPDF
 openai
 python-dotenv
+azure-storage-blob
+pyodbc

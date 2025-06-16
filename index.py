@@ -1,8 +1,12 @@
 from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
+from azure.storage.blob import BlobServiceClient
+import pyodbc
 import httpx
 import fitz  # PyMuPDF
+from uuid import uuid4
 from dotenv import load_dotenv
+from datetime import datetime
 load_dotenv()
 import os
 from openai import OpenAI  # ✅ NUEVA LIBRERÍA
@@ -12,11 +16,17 @@ client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
+blob_service_client = BlobServiceClient.from_connection_string(os.getenv("AZURE_STORAGE_CONNECTION_STRING"))
+CONTAINER_NAME = "postulaciones"
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200"],
+    allow_origins=[
+        "http://localhost:4200",
+        "https://lemon-bush-042e64010.6.azurestaticapps.net"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,35 +93,52 @@ async def crear_postulacion(
 
     texto = extraer_texto_pdf(ruta)
 
-    print(texto)
+    try:
+        resultado = await analizar_con_gpt4o(texto)
+    except Exception as e:
+        os.remove(ruta)
+        resultado = f"❌ Error al procesar el CV: {str(e)}"
 
-    # try:
-    #     resultado = await analizar_con_gpt4o(texto)
-    # except Exception as e:
-    #     resultado = f"❌ Error al procesar el CV: {str(e)}"
+    # Determinar estado
+    estado = "Apto" if resultado.strip().endswith("✅ Apto") else "No Apto"
 
-    # print(resultado)
+     # Subir a Azure Blob Storage
+    blob_name = f"{uuid4()}_{cv.filename}"
+    blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
+    with open(ruta, "rb") as data:
+        blob_client.upload_blob(data, overwrite=True)
 
-    # if resultado.strip().endswith("✅ Apto"):
-    #     # Renombrar o confirmar guardado final si es apto
-    #     final_ruta = f"uploads/{cv.filename}"
-    #     os.rename(ruta, final_ruta)
-    #     return {
-    #         "usuario": usuario,
-    #         "resultado_ia": resultado,
-    #         "cv_guardado_en": final_ruta
-    #     }
-    # else:
-    #     # Eliminar el temporal si no es apto
-    #     os.remove(ruta)
-    #     return {
-    #         "usuario": usuario,
-    #         "resultado_ia": resultado,
-    #         "mensaje": "CV descartado por no cumplir con los requisitos"
-    #     }
+    os.remove(ruta)  # limpiar
+
+    # Insertar en base de datos
+    try:
+        conn_str = os.getenv("DATABASE_URL")
+        conn = pyodbc.connect(conn_str)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO postulaciones (usuario, nombres, apellidos, correo, celular, dni, fecha_nacimiento, cv_ruta, resultado_ia, estado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            usuario,
+            nombres,
+            apellidos,
+            correo,
+            celular,
+            dni,
+            datetime.strptime(fecha_nacimiento, "%Y-%m-%d").date(),
+            blob_name,
+            resultado,
+            estado
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as db_error:
+        return {"error": f"No se pudo guardar en la base de datos: {str(db_error)}"}
 
     return {
-            "usuario": usuario,
-            "resultado_ia": texto,
-            "mensaje": "Xd"
-        }
+        "usuario": usuario,
+        "estado": estado,
+        "ruta_en_blob": blob_name,
+        "resultado_ia": resultado
+    }
