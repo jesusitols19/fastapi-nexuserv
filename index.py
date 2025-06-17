@@ -28,7 +28,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:4200",
         "https://lemon-bush-042e64010.6.azurestaticapps.net",
-        "https://witty-water-0b1d5eb10.1.azurestaticapps.net/"
+        "https://witty-water-0b1d5eb10.1.azurestaticapps.net"
     ],
     allow_credentials=True,
     allow_methods=["*"],
