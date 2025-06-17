@@ -1,12 +1,13 @@
 from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 import pyodbc
 import httpx
 import fitz  # PyMuPDF
 from uuid import uuid4
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 load_dotenv()
 import os
 import pymssql
@@ -165,5 +166,40 @@ def test_db():
         cursor.close()
         conn.close()
         return {"success": True, "result": row[0]}
+    except Exception as e:
+        return {"error": str(e)}
+    
+
+@app.get("/postulaciones/apto")
+def obtener_postulantes_aptos():
+    try:
+        conn = pymssql.connect(
+            server=os.getenv("DB_SERVER"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME")
+        )
+        cursor = conn.cursor(as_dict=True)
+        cursor.execute("SELECT * FROM postulaciones WHERE estado = 'Apto'")
+        resultados = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {"postulantes_aptos": resultados}
+    except Exception as e:
+        return {"error": f"Error al obtener postulantes aptos: {str(e)}"}
+
+@app.get("/get-cv-url/{blob_name}")
+def obtener_url_cv(blob_name: str):
+    try:
+        sas_token = generate_blob_sas(
+            account_name=os.getenv("AZURE_STORAGE_ACCOUNT_NAME"),
+            container_name=CONTAINER_NAME,
+            blob_name=blob_name,
+            account_key=os.getenv("AZURE_STORAGE_ACCOUNT_KEY"),
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.utcnow() + timedelta(minutes=30)
+        )
+        url = f"https://{os.getenv('AZURE_STORAGE_ACCOUNT_NAME')}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}?{sas_token}"
+        return {"url": url}
     except Exception as e:
         return {"error": str(e)}
