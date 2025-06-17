@@ -10,3 +10,5 @@ azure-storage-blob
 pyodbc
 pymssql
 azure-storage-blob
+psycopg2-binary
+pydantic>=2.0
