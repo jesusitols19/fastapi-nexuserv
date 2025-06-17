@@ -27,7 +27,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:4200",
-        "https://lemon-bush-042e64010.6.azurestaticapps.net"
+        "https://lemon-bush-042e64010.6.azurestaticapps.net",
+        "https://witty-water-0b1d5eb10.1.azurestaticapps.net/"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -173,7 +174,7 @@ def test_db():
 @app.get("/postulaciones/apto")
 def obtener_postulantes_aptos():
     try:
-        
+
         conn = pymssql.connect(
             server=os.getenv("DB_SERVER"),
             user=os.getenv("DB_USER"),
