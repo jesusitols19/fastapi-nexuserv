@@ -173,6 +173,7 @@ def test_db():
 @app.get("/postulaciones/apto")
 def obtener_postulantes_aptos():
     try:
+        
         conn = pymssql.connect(
             server=os.getenv("DB_SERVER"),
             user=os.getenv("DB_USER"),
