@@ -12,3 +12,7 @@ pymssql
 azure-storage-blob
 psycopg2-binary
 pydantic>=2.0
+psycopg2-binary
+python-dotenv
+secure-smtplib
+email-validator

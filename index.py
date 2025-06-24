@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from azure.storage.blob import BlobServiceClient
 from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+from fastapi import Query
+from typing import Optional
 import pyodbc
 import httpx
 import fitz  # PyMuPDF
@@ -12,6 +14,12 @@ load_dotenv()
 import os
 import pymssql
 from openai import OpenAI  # ✅ NUEVA LIBRERÍA
+import random
+import string
+
+#Para enviar correo
+import smtplib
+from email.message import EmailMessage
 
 
 #Para postgres
@@ -81,85 +89,6 @@ CV:
     return respuesta.choices[0].message.content
 
 
-@app.get("/")
-def root():
-    return {"message": "¡Hola desde Azure!"}
-
-
-# @app.post("/postulaciones")
-# async def crear_postulacion(
-#     usuario: str = Form(...),
-#     fecha_nacimiento: str = Form(...),
-#     nombres: str = Form(...),
-#     apellidos: str = Form(...),
-#     correo: str = Form(...),
-#     celular: str = Form(...),
-#     dni: str = Form(...),
-#     cv: UploadFile = File(...)
-# ):
-#     ruta = f"uploads/{cv.filename}"
-
-#     with open(ruta, "wb") as f:
-#         f.write(await cv.read())
-
-#     texto = extraer_texto_pdf(ruta)
-
-#     # Simulación del resultado de IA
-#     try:
-#         resultado = await analizar_con_gpt4o(texto)
-#     except Exception as e:
-#         os.remove(ruta)
-#         resultado = f"❌ Error al procesar el CV: {str(e)}"
-
-#     # Determinar estado
-#     estado = "Apto" if resultado.strip().endswith("✅ Apto") else "No Apto"
-
-#     # Subir a Azure Blob Storage
-#     blob_name = f"{uuid4()}_{cv.filename}"
-#     blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=blob_name)
-#     with open(ruta, "rb") as data:
-#         blob_client.upload_blob(data, overwrite=True)
-
-#     os.remove(ruta)  # limpiar
-
-#     # Insertar en base de datos usando pymssql
-#     try:
-#         conn = pymssql.connect(
-#             server=os.getenv("DB_SERVER"),
-#             user=os.getenv("DB_USER"),
-#             password=os.getenv("DB_PASSWORD"),
-#             database=os.getenv("DB_NAME")
-#         )
-#         cursor = conn.cursor()
-#         cursor.execute("""
-#             INSERT INTO postulaciones (usuario, nombres, apellidos, correo, celular, dni, fecha_nacimiento, cv_ruta, resultado_ia, estado)
-#             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-#         """, (
-#             usuario,
-#             nombres,
-#             apellidos,
-#             correo,
-#             celular,
-#             dni,
-#             datetime.strptime(fecha_nacimiento, "%Y-%m-%d").date(),
-#             blob_name,
-#             resultado,
-#             estado
-#         ))
-#         conn.commit()
-#         cursor.close()
-#         conn.close()
-#     except Exception as db_error:
-#         print(f"[ERROR SQL] {db_error}")
-#         return {"error": f"No se pudo guardar en la base de datos: {str(db_error)}"}
-
-#     return {
-#         "usuario": usuario,
-#         "estado": estado,
-#         "ruta_en_blob": blob_name,
-#         "resultado_ia": resultado
-#     }
-
 
 @app.post("/postulaciones")
 async def crear_postulacion(
@@ -222,9 +151,9 @@ async def crear_postulacion(
 
         # 3. Insertar CV (tabla cvs)
         cur.execute("""
-            INSERT INTO cvs (user_id, file_path, status_id)
-            VALUES (%s, %s, %s)
-        """, (user_id, blob_name, status_id))
+            INSERT INTO cvs (user_id, file_path, status_id, ia_result)
+            VALUES (%s, %s, %s, %s)
+        """, (user_id, blob_name, status_id, resultado))
 
         conn.commit()
         cur.close()
@@ -241,45 +170,32 @@ async def crear_postulacion(
         "resultado_ia": resultado
     }
 
-
-
-@app.get("/test-db")
-def test_db():
+@app.get("/cvs/detalle/{cv_id}")
+def detalle_cv(cv_id: int):
     try:
-        conn = pymssql.connect(
-            server=os.getenv("DB_SERVER"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASSWORD"),
-            database=os.getenv("DB_NAME")
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        row = cursor.fetchone()
-        cursor.close()
+        conn = get_pg_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT c.ia_result, c.file_path, u.first_name, u.last_name
+            FROM cvs c
+            JOIN users u ON u.id = c.user_id
+            WHERE c.id = %s;
+        """, (cv_id,))
+        row = cur.fetchone()
+        cur.close()
         conn.close()
-        return {"success": True, "result": row[0]}
+        if not row:
+            raise HTTPException(status_code=404, detail="CV no encontrado")
+
+        return {
+            "nombre": f"{row[2]} {row[3]}",
+            "cv_path": row[1],
+            "resultado_ia": row[0]
+        }
+
     except Exception as e:
-        return {"error": str(e)}
-    
+        raise HTTPException(status_code=500, detail=str(e))
 
-# @app.get("/postulaciones/apto")
-# def obtener_postulantes_aptos():
-#     try:
-
-#         conn = pymssql.connect(
-#             server=os.getenv("DB_SERVER"),
-#             user=os.getenv("DB_USER"),
-#             password=os.getenv("DB_PASSWORD"),
-#             database=os.getenv("DB_NAME")
-#         )
-#         cursor = conn.cursor(as_dict=True)
-#         cursor.execute("SELECT * FROM postulaciones WHERE estado = 'Apto'")
-#         resultados = cursor.fetchall()
-#         cursor.close()
-#         conn.close()
-#         return {"postulantes_aptos": resultados}
-#     except Exception as e:
-#         return {"error": f"Error al obtener postulantes aptos: {str(e)}"}
 
 @app.get("/get-cv-url/{blob_name}")
 def obtener_url_cv(blob_name: str):
@@ -298,21 +214,6 @@ def obtener_url_cv(blob_name: str):
         return {"error": str(e)}
     
 
-@app.get("/test-pg")
-def test_pg():
-    try:
-        conn = get_pg_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT version();")
-        version = cur.fetchone()
-        cur.close()
-        conn.close()
-        return {"pg_version": version[0]}
-    except Exception as e:
-        return {"error": f"PostgreSQL error: {str(e)}"}
-
-
-
 
 # Esquema opcional de respuesta
 class UserResponse(BaseModel):
@@ -321,6 +222,8 @@ class UserResponse(BaseModel):
     first_name: str
     last_name: str
     role_id: int
+    phone_number: str | None = None
+    document_number: str | None = None
 
 @app.post("/auth/cliente", response_model=UserResponse)
 def login_cliente(email: str = Form(...), password: str = Form(...)):
@@ -329,10 +232,20 @@ def login_cliente(email: str = Form(...), password: str = Form(...)):
         cur = conn.cursor()
 
         query = """
-        SELECT id, email, first_name, last_name, role_id
-        FROM users
-        WHERE email = %s AND password = %s AND role_id = 1;
+        SELECT 
+            u.id,
+            u.email,
+            u.first_name,
+            u.last_name,
+            u.role_id,
+            up.phone_number,
+            ud.document_number
+        FROM users u
+        LEFT JOIN user_phones up ON up.user_id = u.id
+        LEFT JOIN user_documents ud ON ud.user_id = u.id
+        WHERE u.email = %s AND u.password = %s AND u.role_id = 1;
         """
+
         cur.execute(query, (email, password))
         user = cur.fetchone()
 
@@ -346,13 +259,14 @@ def login_cliente(email: str = Form(...), password: str = Form(...)):
                 "first_name": user[2],
                 "last_name": user[3],
                 "role_id": user[4],
+                "phone_number": user[5],
+                "document_number": user[6]
             }
         else:
             raise HTTPException(status_code=401, detail="Credenciales inválidas o rol incorrecto.")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
-    
 
     
 # Modelo de respuesta
@@ -401,6 +315,7 @@ def get_service_requests():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
     
+
 
 
 class CVConUsuario(BaseModel):
@@ -453,3 +368,329 @@ def get_cvs_apto():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
+    
+
+@app.get("/cvs/estado/{estado}", response_model=List[CVConUsuario])
+def get_cvs_por_estado(estado: str):
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+        query = """
+        SELECT 
+            c.id AS cv_id,
+            c.file_path,
+            c.uploaded_at,
+            u.id AS user_id,
+            u.email,
+            u.first_name,
+            u.last_name
+        FROM cvs c
+        JOIN cv_statuses s ON c.status_id = s.id
+        JOIN users u ON c.user_id = u.id
+        WHERE s.name = %s;
+        """
+        cur.execute(query, (estado,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return [{
+            "cv_id": row[0],
+            "file_path": row[1],
+            "uploaded_at": row[2].isoformat(),
+            "user_id": row[3],
+            "email": row[4],
+            "first_name": row[5],
+            "last_name": row[6]
+        } for row in rows]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/usuarios")
+def obtener_usuarios():
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+
+        query = """
+        SELECT 
+            u.id, u.first_name, u.last_name, u.email, u.status, u.role_id,
+            r.name AS role_name
+        FROM users u
+        JOIN roles r ON u.role_id = r.id;
+        """
+        cur.execute(query)
+        users = cur.fetchall()
+
+        # Obtener direcciones
+        cur.execute("""
+        SELECT user_id, address_text, latitude, longitude
+        FROM user_addresses
+        """)
+        addresses = cur.fetchall()
+        dir_map = {}
+        for u_id, address, lat, lon in addresses:
+            dir_map.setdefault(u_id, []).append(f"{address} ({lat}, {lon})")
+
+        # Obtener teléfonos
+        cur.execute("""
+        SELECT user_id, phone_number FROM user_phones
+        """)
+        phones = cur.fetchall()
+        phone_map = {}
+        for u_id, phone in phones:
+            phone_map.setdefault(u_id, []).append(phone)
+
+        # Obtener documentos
+        cur.execute("""
+        SELECT user_id, document_number FROM user_documents
+        """)
+        docs = cur.fetchall()
+        doc_map = {}
+        for u_id, doc in docs:
+            doc_map.setdefault(u_id, []).append(doc)
+
+        result = []
+        for u in users:
+            result.append({
+                "id": u[0],
+                "first_name": u[1],
+                "last_name": u[2],
+                "email": u[3],
+                "status": u[4],
+                "role_id": u[5],
+                "role_name": u[6],
+                "phones": phone_map.get(u[0], []),
+                "addresses": dir_map.get(u[0], []),
+                "documents": doc_map.get(u[0], [])
+            })
+
+        cur.close()
+        conn.close()
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/admin/usuarios/{user_id}/estado")
+def cambiar_estado_usuario(user_id: int, estado: bool = Form(...)):
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+
+        cur.execute("UPDATE users SET status = %s WHERE id = %s", (estado, user_id))
+        conn.commit()
+
+        cur.close()
+        conn.close()
+
+        return {"message": f"Usuario {user_id} actualizado a estado {'Activo' if estado else 'Inactivo'}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al actualizar estado: {str(e)}")
+
+class PagoOut(BaseModel):
+    id: int
+    specialist_name: str
+    client_name: str
+    amount: float
+    status: str
+    created_at: str
+
+@app.get("/admin/pagos", response_model=List[PagoOut])
+def obtener_pagos():
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT p.id,
+                   CONCAT(s.first_name, ' ', s.last_name) AS specialist_name,
+                   CONCAT(c.first_name, ' ', c.last_name) AS client_name,
+                   p.amount, p.status, p.created_at
+            FROM payments p
+            JOIN users s ON p.specialist_id = s.id
+            JOIN users c ON p.client_id = c.id
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        return [{
+            "id": r[0],
+            "specialist_name": r[1],
+            "client_name": r[2],
+            "amount": r[3],
+            "status": r[4],
+            "created_at": r[5].isoformat()
+        } for r in rows]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    
+@app.put("/admin/pagos/{pago_id}/estado")
+def cambiar_estado_pago(pago_id: int, estado: str = Form(...)):
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+        cur.execute("UPDATE payments SET status = %s WHERE id = %s", (estado, pago_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"message": f"Pago {pago_id} actualizado a estado {estado}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/admin/solicitudes")
+def obtener_solicitudes(
+    status: Optional[str] = Query(None),
+    acceptance_status: Optional[str] = Query(None)
+):
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+
+        query = """
+        SELECT
+            sr.id,
+            s.name AS service_name,
+            CONCAT(c.first_name, ' ', c.last_name) AS client_name,
+            CONCAT(e.first_name, ' ', e.last_name) AS specialist_name,
+            sr.status,
+            sr.acceptance_status,
+            sr.requested_at
+        FROM service_requests sr
+        JOIN users c ON sr.user_id = c.id
+        JOIN services s ON sr.service_id = s.id
+        LEFT JOIN users e ON sr.specialist_id = e.id
+        WHERE 1=1
+        """
+        params = []
+
+        if status:
+            query += " AND sr.status = %s"
+            params.append(status)
+        if acceptance_status:
+            query += " AND sr.acceptance_status = %s"
+            params.append(acceptance_status)
+
+        cur.execute(query, params)
+        rows = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        return [
+            {
+                "id": r[0],
+                "service_name": r[1],
+                "client_name": r[2],
+                "specialist_name": r[3],
+                "status": r[4],
+                "acceptance_status": r[5],
+                "requested_at": r[6].isoformat() if r[6] else None
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+def generar_password(nombre: str, apellido: str, length: int = 4) -> str:
+    aleatorio = ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+    return f"{nombre.lower()}{apellido.lower()}{aleatorio}"
+
+def enviar_correo(destinatario: str, asunto: str, cuerpo: str):
+    remitente = os.getenv("EMAIL_SENDER")
+    password = os.getenv("EMAIL_PASSWORD")
+
+    msg = EmailMessage()
+    msg['Subject'] = asunto
+    msg['From'] = remitente
+    msg['To'] = destinatario
+    msg.set_content(cuerpo)
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(remitente, password)
+        smtp.send_message(msg)
+
+
+@app.put("/postulantes/aceptar/{user_id}")
+def aceptar_postulante(user_id: int):
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+
+        # Obtener datos del usuario
+        cur.execute("SELECT first_name, last_name, email FROM users WHERE id = %s AND role_id = 2;", (user_id,))
+        user = cur.fetchone()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="Postulante no encontrado o ya no es postulante.")
+
+        first_name, last_name, email = user
+        nueva_pass = generar_password(first_name, last_name)
+
+        # Actualizar usuario
+        cur.execute("""
+            UPDATE users 
+            SET password = %s, role_id = 3 
+            WHERE id = %s;
+        """, (nueva_pass, user_id))
+        conn.commit()
+
+        # Enviar correo
+        asunto = "Acceso como Especialista"
+        cuerpo = f"""
+Hola {first_name} {last_name},
+
+Tu postulación ha sido aceptada. Ya puedes acceder a la plataforma movil como especialista.
+
+Tus credenciales son:
+- Usuario: {email}
+- Contraseña: {nueva_pass}
+
+Recuerda descargar la aplicacion desde google play.
+
+Saludos,
+Equipo Nexuserv
+"""
+        enviar_correo(email, asunto, cuerpo)
+
+        cur.close()
+        conn.close()
+
+        return {"mensaje": "Postulante aceptado y correo enviado."}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
+
+# Pruebas de conexion para probar Api
+
+@app.get("/test-pg")
+def test_pg():
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT version();")
+        version = cur.fetchone()
+        cur.close()
+        conn.close()
+        return {"pg_version": version[0]}
+    except Exception as e:
+        return {"error": f"PostgreSQL error: {str(e)}"}
+    
+
+@app.get("/")
+def root():
+    return {"message": "¡Hola desde Azure!"}
+
+@app.get("/test-email")
+def test_email():
+    try:
+        enviar_correo("jesusitolspro.19@gmail.com", "Prueba desde FastAPI", "¡Correo de prueba enviado!")
+        return {"message": "Correo enviado correctamente"}
+    except Exception as e:
+        return {"error": str(e)}
