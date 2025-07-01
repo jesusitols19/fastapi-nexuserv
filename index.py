@@ -44,7 +44,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:4200",
         "https://lemon-bush-042e64010.6.azurestaticapps.net",
-        "https://witty-water-0b1d5eb10.1.azurestaticapps.net"
+        "https://witty-water-0b1d5eb10.1.azurestaticapps.net",
+        "https://orange-field-0b261ba0f.2.azurestaticapps.net"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -666,6 +667,97 @@ Equipo Nexuserv
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
+
+
+# Modelo Pydantic para la validación de datos de servicio
+class Service(BaseModel):
+    name: str
+    description: str = None
+    image_url: str = None  # Agregar campo para la URL de la imagen
+
+# Respuesta del servicio
+class ServiceResponse(Service):
+    id: int
+
+# Endpoint para crear un servicio
+@app.post("/services/", response_model=ServiceResponse)
+async def create_service(service: Service):
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO services (name, description, image_url)
+            VALUES (%s, %s, %s) RETURNING id, name, description, image_url;
+        """, (service.name, service.description, service.image_url))
+        new_service = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return ServiceResponse(id=new_service[0], name=service.name, description=service.description, image_url=service.image_url)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al crear servicio: {e}")
+
+
+# Endpoint para obtener todos los servicios
+@app.get("/services/", response_model=List[ServiceResponse])
+async def get_services():
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, description, image_url FROM services")
+        services = cursor.fetchall()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return [ServiceResponse(id=row[0], name=row[1], description=row[2], image_url=row[3]) for row in services]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener servicios: {e}")
+
+
+# Endpoint para actualizar un servicio
+@app.put("/services/{service_id}", response_model=ServiceResponse)
+async def update_service(service_id: int, service: Service):
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE services
+            SET name = %s, description = %s, image_url = %s
+            WHERE id = %s RETURNING id, name, description, image_url;
+        """, (service.name, service.description, service.image_url, service_id))
+        updated_service = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        if updated_service:
+            return ServiceResponse(id=updated_service[0], name=updated_service[1], description=updated_service[2], image_url=updated_service[3])
+        else:
+            raise HTTPException(status_code=404, detail="Servicio no encontrado")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al actualizar servicio: {e}")
+
+
+# Endpoint para eliminar un servicio
+@app.delete("/services/{service_id}", response_model=ServiceResponse)
+async def delete_service(service_id: int):
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM services WHERE id = %s RETURNING id, name, description, image_url;", (service_id,))
+        deleted_service = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+        if deleted_service:
+            return ServiceResponse(id=deleted_service[0], name=deleted_service[1], description=deleted_service[2], image_url=deleted_service[3])
+        else:
+            raise HTTPException(status_code=404, detail="Servicio no encontrado")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar servicio: {e}")
+
+
+
+
 
 # Pruebas de conexion para probar Api
 
